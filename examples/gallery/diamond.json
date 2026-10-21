@@ -1,0 +1,81 @@
+{
+  "seed": 23,
+  "index": 0,
+  "params": {
+    "volume": 1.6,
+    "drop_height": 90.0,
+    "pour_rate": 400.0,
+    "pour_wobble": 0.8,
+    "stream_radius": 1.5,
+    "temp": 115.0,
+    "ambient": 22.0,
+    "delay": 4.0,
+    "force": 40.0,
+    "offset_x": 0.0,
+    "offset_y": 0.0,
+    "rotation": 0.0,
+    "tilt": 1.5,
+    "tilt_dir": 249.81590903665114,
+    "press_speed": 4.0,
+    "dwell": 5.0,
+    "viscosity": 15.0,
+    "visc_slope": 0.07,
+    "yield_stress": 250.0,
+    "yield_slope": 0.09,
+    "cool_time": 5.0,
+    "stamp_chill": 3.0
+  },
+  "specs": {
+    "volume": "1.6",
+    "drop_height": "90",
+    "pour_rate": "400",
+    "pour_wobble": "0.8",
+    "stream_radius": "1.5",
+    "temp": "115",
+    "ambient": "22",
+    "delay": "4",
+    "force": "40",
+    "offset_x": "0",
+    "offset_y": "0",
+    "rotation": "0",
+    "tilt": "1.5",
+    "tilt_dir": "0:360",
+    "press_speed": "4",
+    "dwell": "5",
+    "viscosity": "15",
+    "visc_slope": "0.07",
+    "yield_stress": "250",
+    "yield_slope": "0.09",
+    "cool_time": "5",
+    "stamp_chill": "3"
+  },
+  "stamp": "examples/stamps/diamond.png",
+  "stamp_size_mm": 26.0,
+  "relief_depth_mm": 1.0,
+  "mirror": true,
+  "resolution_mm": 0.15,
+  "result": {
+    "contact_area": 309.91499999999996,
+    "film": 0.7713995288043934,
+    "T_contact": 75.04604247378168,
+    "force_at_stop": 23.43603397758977,
+    "stamp_center": [
+      0.22931650053595085,
+      0.47575210833188447
+    ],
+    "puddle_center": [
+      0.22931650053595085,
+      0.47575210833188447
+    ],
+    "max_height": 5.031115270980797,
+    "volume_mm3": 1600.0000000000002
+  },
+  "heightmap": {
+    "file": "diamond_height.png",
+    "mm_per_pixel": 0.15,
+    "z_mm_at_white": 5.031115270980797,
+    "width_mm": 32.699999999999996,
+    "height_mm": 32.699999999999996,
+    "note": "16 бит; высота_мм = значение/65535 * z_mm_at_white"
+  }
+}

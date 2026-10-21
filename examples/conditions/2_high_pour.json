@@ -1,0 +1,81 @@
+{
+  "seed": 32,
+  "index": 0,
+  "params": {
+    "volume": 2.0,
+    "drop_height": 180.0,
+    "pour_rate": 400.0,
+    "pour_wobble": 0.8,
+    "stream_radius": 1.5,
+    "temp": 115.0,
+    "ambient": 22.0,
+    "delay": 4.0,
+    "force": 60.0,
+    "offset_x": 2.0,
+    "offset_y": -1.5,
+    "rotation": 0.0,
+    "tilt": 2.0,
+    "tilt_dir": 57.6874189349165,
+    "press_speed": 4.0,
+    "dwell": 5.0,
+    "viscosity": 15.0,
+    "visc_slope": 0.07,
+    "yield_stress": 250.0,
+    "yield_slope": 0.09,
+    "cool_time": 5.0,
+    "stamp_chill": 3.0
+  },
+  "specs": {
+    "volume": "2.0",
+    "drop_height": "180",
+    "pour_rate": "400",
+    "pour_wobble": "0.8",
+    "stream_radius": "1.5",
+    "temp": "115",
+    "ambient": "22",
+    "delay": "4",
+    "force": "60",
+    "offset_x": "2",
+    "offset_y": "-1.5",
+    "rotation": "0",
+    "tilt": "2",
+    "tilt_dir": "0:360",
+    "press_speed": "4",
+    "dwell": "5",
+    "viscosity": "15",
+    "visc_slope": "0.07",
+    "yield_stress": "250",
+    "yield_slope": "0.09",
+    "cool_time": "5",
+    "stamp_chill": "3"
+  },
+  "stamp": "examples/stamps/circle.png",
+  "stamp_size_mm": 26.0,
+  "relief_depth_mm": 1.2,
+  "mirror": true,
+  "resolution_mm": 0.15,
+  "result": {
+    "contact_area": 490.31999999999994,
+    "film": 0.9827197659732061,
+    "T_contact": 69.99199953492705,
+    "force_at_stop": 57.83422741610471,
+    "stamp_center": [
+      1.8452395531608043,
+      -1.6141182947794555
+    ],
+    "puddle_center": [
+      -0.15476044683919565,
+      -0.11411829477945534
+    ],
+    "max_height": 5.907993016933731,
+    "volume_mm3": 2000.0000000000002
+  },
+  "heightmap": {
+    "file": "2_high_pour_height.png",
+    "mm_per_pixel": 0.15,
+    "z_mm_at_white": 5.907993016933731,
+    "width_mm": 37.8,
+    "height_mm": 37.5,
+    "note": "16 бит; высота_мм = значение/65535 * z_mm_at_white"
+  }
+}
