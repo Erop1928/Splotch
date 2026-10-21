@@ -14,7 +14,10 @@ Splotch - физическая (2.5D) симуляция сургучной пе
      образуя валик. Глубина определяется балансом силы прижима и
      сопротивления пластичного сургуча (формула Прандтля для сжатия слоя).
   4. Выдержка под штампом (сургуч остывает быстрее от холодного штампа),
-     подъём штампа.
+     подъём штампа. Воздух в замкнутых углублениях штампа сжимается, но
+     остаётся (Бойль-Мариотт), поэтому такие детали заполняются не до конца.
+     Пузырьки воздуха (--bubbles) переносятся течением, всплывают по Стоксу,
+     лопаются у поверхности; оставшиеся внутри идут в STL как полости.
   5. Экспорт: STL и/или 16-битная карта высот PNG (+ JSON с масштабом, превью).
 
 Формат карты высот штампа:
@@ -114,6 +117,9 @@ SIM_PARAMS = {
     "yield_slope":   ("0.09", 0, 1, "рост ln(предела текучести) на 1°C остывания"),
     "cool_time":     ("5", 0.1, 1000, "время остывания слоя 1 мм на бумаге, с"),
     "stamp_chill":   ("3", 1, 50, "во сколько раз быстрее остывает сургуч под штампом"),
+    "bubbles":       ("0", 0, 5000, "пузырьков воздуха на 1 см^3 сургуча при наливе с 0 мм (0 = нет)"),
+    "bubble_size":   ("0.25", 0.02, 3, "средний радиус пузырька, мм"),
+    "air_leak":      ("0.3", 0, 100, "утечка воздуха из закрытых карманов штампа, доля в секунду"),
 }
 
 
@@ -239,6 +245,21 @@ class Wax:
         noise /= max(noise.std(), 1e-9)
         self.noise = np.exp(0.35 * np.clip(noise, -1.5, 1.5))
         self.h_pin = 0.3   # мм: минимальная толщина края, ниже которой плёнка не течёт
+        # смещение сургуча с последнего опроса (мм) - по нему переносятся пузырьки
+        self.dsx = np.zeros((n, n))
+        self.dsy = np.zeros((n, n))
+
+    def track(self, qy, qx, h, sl=(slice(None), slice(None))):
+        """Накопить смещение сургуча по потокам через грани (в мм толщины)."""
+        fx = np.zeros_like(h)
+        fy = np.zeros_like(h)
+        fx[:, :-1] += qx / 2
+        fx[:, 1:] += qx / 2
+        fy[:-1, :] += qy / 2
+        fy[1:, :] += qy / 2
+        hh = np.maximum(h, 0.1)
+        self.dsx[sl] += fx * self.dx / hh
+        self.dsy[sl] -= fy * self.dx / hh     # строки растут вниз, y - вверх
 
     def viscosity(self, T):
         P = self.P
@@ -290,6 +311,7 @@ class Wax:
                 b = blocked[sl] if blocked is not None else None
                 dh = np.zeros_like(h)
                 dE = np.zeros_like(h)
+                qs = []
                 for axis in (0, 1):
                     a = [slice(None), slice(None)]
                     lo, hi = list(a), list(a)
@@ -306,6 +328,8 @@ class Wax:
                     dh[hi] += q
                     dE[lo] -= q * Tf
                     dE[hi] += q * Tf
+                    qs.append(q)
+                self.track(qs[0], qs[1], h, sl)
                 E = h * T + dE
                 h += dh
                 np.maximum(h, 0.0, out=h)
@@ -387,6 +411,18 @@ class Wax:
             vals = np.concatenate(vals + [diag])
             A = csr_matrix((vals, (rows, cols)), shape=(m, m)).tocsc()
             p = spsolve(A, exf)
+            pf = np.zeros(n * n)
+            pf[ii] = p
+            pf = pf.reshape(n, n)
+            hg = hf.reshape(n, n)
+            for_axis = []
+            for lo, hi in (((slice(None, -1), slice(None)), (slice(1, None), slice(None))),
+                           ((slice(None), slice(None, -1)), (slice(None), slice(1, None)))):
+                K = (0.5 * (hg[lo] + hg[hi])) ** 3 + 1e-6
+                q = K * (pf[lo] - pf[hi])
+                q[~(interior[lo] | interior[hi])] = 0.0
+                for_axis.append(q)
+            self.track(for_axis[0], for_axis[1], hg)
             bnb = np.concatenate(bnb)
             bK = np.concatenate(bK)
             bsrc = np.concatenate(bsrc)
@@ -402,6 +438,203 @@ class Wax:
             Tf[...] = np.where(add > 0, (hf * Tf + addE) / np.maximum(hn, 1e-12), Tf)
             hf[...] = hn
         return moved
+
+
+class Bubbles:
+    """Пузырьки воздуха в сургуче.
+
+    Положение: x, y (мм) и s - относительная высота в слое (0 - бумага,
+    1 - поверхность). Пузырёк занимает объём, поэтому при рождении толщина
+    слоя растёт; когда он лопается у поверхности, на его месте вырезается
+    кратер. Горячий сургуч кратер затягивает, застывший - нет.
+    """
+
+    POP = 0.25   # лопается, если плёнка над ним тоньше POP * r
+
+    def __init__(self):
+        self.x = np.zeros(0)
+        self.y = np.zeros(0)
+        self.s = np.zeros(0)
+        self.r = np.zeros(0)
+        self.created = 0
+        self.popped = 0
+
+    def __len__(self):
+        return len(self.r)
+
+    @staticmethod
+    def _idx(wax, x, y):
+        n = wax.n
+        j = np.clip(np.round(x / wax.dx + (n - 1) / 2).astype(int), 0, n - 1)
+        i = np.clip(np.round((n - 1) / 2 - y / wax.dx).astype(int), 0, n - 1)
+        return i, j
+
+    def _disc(self, wax, x, y, r):
+        """Клетки под пузырьком и толщина сферы в каждой (мм)."""
+        dx, n = wax.dx, wax.n
+        i, j = self._idx(wax, np.array([x]), np.array([y]))
+        i, j = int(i[0]), int(j[0])
+        k = int(math.ceil(r / dx))
+        i0, i1, j0, j1 = max(i - k, 0), min(i + k + 1, n), max(j - k, 0), min(j + k + 1, n)
+        jj, ii = np.meshgrid(np.arange(j0, j1), np.arange(i0, i1))
+        d2 = (((jj - (n - 1) / 2) * dx - x) ** 2 + (((n - 1) / 2 - ii) * dx - y) ** 2)
+        half = np.sqrt(np.maximum(r * r - d2, 0.0))
+        vol = 4.0 / 3.0 * math.pi * r ** 3 / (dx * dx)   # объём в "мм толщины" одной клетки
+        if half.sum() * 2 < 0.5 * vol:                   # пузырёк меньше клетки
+            half = np.zeros_like(half)
+            half[i - i0, j - j0] = vol / 2
+        else:
+            half *= vol / (2 * half.sum())
+        return (slice(i0, i1), slice(j0, j1)), half, (i, j)
+
+    def add(self, wax, x, y, s, r):
+        sl, half, _ = self._disc(wax, x, y, r)
+        wax.h[sl] += 2 * half
+        self.x = np.append(self.x, x)
+        self.y = np.append(self.y, y)
+        self.s = np.append(self.s, s)
+        self.r = np.append(self.r, r)
+        self.created += 1
+
+    def advect(self, wax):
+        """Пузырьки уносятся вместе с сургучом."""
+        if len(self):
+            i, j = self._idx(wax, self.x, self.y)
+            self.x = self.x + wax.dsx[i, j]
+            self.y = self.y + wax.dsy[i, j]
+        wax.dsx[...] = 0.0
+        wax.dsy[...] = 0.0
+
+    def rise(self, wax, dt):
+        """Всплытие по Стоксу: v = 2/9 * drho * g * r^2 / mu."""
+        if not len(self) or dt <= 0:
+            return
+        i, j = self._idx(wax, self.x, self.y)
+        h = np.maximum(wax.h[i, j], 1e-3)
+        mu = wax.viscosity(wax.T[i, j])
+        v = (2.0 / 9.0) * RHO * G_MM * self.r ** 2 / (mu * 1e-3)   # мм/с
+        self.s = np.clip(self.s + v * dt / h, 0.0, 1.0)
+
+    def pop(self, wax):
+        if not len(self):
+            return 0
+        i, j = self._idx(wax, self.x, self.y)
+        h = wax.h[i, j]
+        z = np.maximum(self.s * h, np.minimum(self.r, h / 2))   # высота центра, мм
+        alive = np.ones(len(self), bool)
+        total = 0
+        while True:
+            hc = wax.h[i, j]
+            burst = alive & ((hc - z - self.r) < self.POP * self.r)
+            if not burst.any():
+                break
+            for k in np.flatnonzero(burst):
+                sl, half, _ = self._disc(wax, self.x[k], self.y[k], self.r[k])
+                hs = wax.h[sl]
+                # вскрытая полость: поверхность опускается до низа сферы,
+                # но вынимается не больше объёма самого пузырька
+                new = np.where(half > 0, np.maximum(np.minimum(hs, z[k] - half), 0.0), hs)
+                removed = (hs - new).sum()
+                limit = 2 * half.sum()
+                if removed > limit > 0:
+                    new = hs - (hs - new) * (limit / removed)
+                hs[...] = new
+            alive &= ~burst
+            total += int(burst.sum())
+        # соседи сохраняют абсолютную высоту, а не долю от новой толщины слоя
+        hc = np.maximum(wax.h[i, j], 1e-6)
+        self.s = np.clip(z / hc, 0.0, 1.0)
+        self.popped += total
+        self.x, self.y, self.s, self.r = self.x[alive], self.y[alive], self.s[alive], self.r[alive]
+        return total
+
+    def voids(self, wax, margin=0.03):
+        """Оставшиеся внутри пузырьки: (строка, столбец, z, r) для STL."""
+        out = []
+        n, dx = wax.n, wax.dx
+        for x, y, s, r in zip(self.x, self.y, self.s, self.r):
+            sl, half, (i, j) = self._disc(wax, x, y, r)
+            h = wax.h[i, j]
+            hmin = wax.h[sl][half > 0].min() if (half > 0).any() else h
+            z = max(s * h, r + margin)
+            r_fit = min(r, z - margin, hmin - z - margin)
+            if r_fit > 0.02:
+                out.append(((n - 1) / 2 - y / dx, x / dx + (n - 1) / 2, z, r_fit))
+        return out
+
+
+class AirPockets:
+    """Воздух, запертый в углублениях штампа.
+
+    Карман - связная область без контакта сургуча со штампом, не соединённая
+    с наружным воздухом. В момент закрытия воздух в нём при атмосферном
+    давлении; дальше он сжимается давлением сургуча (Бойль-Мариотт) и
+    понемногу утекает. Воздух занимает самые глубокие места кармана, сургуч
+    поднимается до горизонтального уровня под ним.
+    """
+
+    P_ATM = 101325.0
+
+    def __init__(self, n):
+        self.n_air = np.zeros((n, n))   # количество воздуха (мм толщины при 1 атм)
+        self.count = 0
+        self.volume = 0.0
+        self.mask = np.zeros((n, n), bool)
+
+    def deficit(self, wax, c_eff):
+        """Сколько сургуча (мм^3) нужно, чтобы карманы заполнились до равновесия."""
+        m = self.mask
+        if not m.any():
+            return 0.0
+        return float(np.maximum(c_eff[m] - wax.h[m], 0.0).sum() * wax.dx ** 2)
+
+    def ceiling(self, wax, c, contact, p_wax, dt, leak):
+        n_air = self.n_air
+        n_air *= math.exp(-leak * dt)
+        air = ~contact
+        lab, nl = ndimage.label(air)
+        vented = np.zeros(nl + 1, bool)
+        vented[np.unique(lab[~np.isfinite(c)])] = True
+        for edge in (lab[0, :], lab[-1, :], lab[:, 0], lab[:, -1]):
+            vented[np.unique(edge)] = True
+        vented[0] = True
+        pocket = ~vented[lab]
+        # воздух из клеток, которые закрыл сургуч, уходит в ближайший карман
+        orphan = (n_air > 0) & contact
+        if orphan.any() and pocket.any():
+            dist, (ti, tj) = ndimage.distance_transform_edt(~pocket, return_indices=True)
+            oi, oj = np.nonzero(orphan)
+            near = dist[oi, oj] <= 3
+            np.add.at(n_air, (ti[oi[near], oj[near]], tj[oi[near], oj[near]]), n_air[oi[near], oj[near]])
+        n_air[~pocket] = 0.0
+        new = pocket & (n_air <= 0)
+        n_air[new] = np.maximum(c[new] - wax.h[new], 1e-6)
+        c_eff = c.copy()
+        self.count = 0
+        self.volume = 0.0
+        self.mask = pocket
+        if not pocket.any():
+            return c_eff
+        squeeze = self.P_ATM / (self.P_ATM + max(p_wax, 0.0))
+        objs = ndimage.find_objects(np.where(pocket, lab, 0))
+        for k, sl in enumerate(objs, start=1):
+            if sl is None:
+                continue
+            m = lab[sl] == k
+            cs = c[sl][m]
+            v_air = n_air[sl][m].sum() * squeeze
+            order = np.sort(cs)[::-1]
+            cum = np.cumsum(order)
+            cnt = np.arange(1, len(order) + 1)
+            L = (cum - v_air) / cnt
+            nxt = np.append(order[1:], -np.inf)
+            kk = int(np.argmax(L >= nxt))
+            level = L[kk]
+            cc = c_eff[sl]
+            cc[m] = np.minimum(cs, level)
+            self.count += 1
+            self.volume += v_air * wax.dx ** 2
+        return c_eff
 
 
 # ----------------------------------------------------------------------------
@@ -424,6 +657,7 @@ def simulate(P, stamp, args, rng, log):
     coords_c = (np.arange(nc) - (nc - 1) / 2) * dx * f
     Xc, Yc = np.meshgrid(coords_c, -coords_c)
     wax = Wax(nc, dx * f, P, rng)
+    bubbles = Bubbles()
     log(f"  сетка {n}x{n}, шаг {dx} мм (налив: шаг {dx * f:.3g} мм), поле {n * dx:.1f} мм")
 
     # --- 1. налив ---
@@ -449,6 +683,13 @@ def simulate(P, stamp, args, rng, log):
         px = wob[0] + r_coil * math.cos(phase)
         py = wob[1] + r_coil * math.sin(phase)
         wax.deposit(px, py, sigma * rng.uniform(0.85, 1.15), dvol, T_arr, Xc, Yc)
+        if P["bubbles"] > 0:
+            # воздух захватывается при плавлении палочки и при ударе струи
+            nb = rng.poisson(P["bubbles"] * dvol / 1000.0 * (1.0 + H / 100.0))
+            for _ in range(nb):
+                r = float(np.clip(rng.lognormal(math.log(P["bubble_size"]), 0.45), 0.03, 1.5))
+                bubbles.add(wax, px + rng.normal(0, sigma * 0.7), py + rng.normal(0, sigma * 0.7),
+                            rng.uniform(0.15, 1.0), r)
         if rng.random() < splash_p:
             for _ in range(rng.integers(1, 3)):
                 a = rng.uniform(0, 2 * math.pi)
@@ -459,10 +700,19 @@ def simulate(P, stamp, args, rng, log):
                             max(rng.uniform(0.25, 0.5), 0.6 * dx * f), sv, T_arr - 15, Xc, Yc)
                 n_splash += 1
         wax.flow(dt_dep)
-    log(f"  налив: {Tp:.2f} с, удар {v_imp / 1000:.2f} м/с, брызг {n_splash}")
+        bubbles.advect(wax)
+        bubbles.rise(wax, dt_dep)
+        bubbles.pop(wax)
+    log(f"  налив: {Tp:.2f} с, удар {v_imp / 1000:.2f} м/с, брызг {n_splash}"
+        + (f", пузырьков {bubbles.created}" if bubbles.created else ""))
 
     # --- 2. пауза ---
-    wax.flow(P["delay"])
+    for _ in range(max(int(math.ceil(P["delay"] / 0.5)), 1)):
+        step = P["delay"] / max(int(math.ceil(P["delay"] / 0.5)), 1)
+        wax.flow(step)
+        bubbles.advect(wax)
+        bubbles.rise(wax, step)
+        bubbles.pop(wax)
     # перенос на точную сетку с сохранением объёма
     ic = (np.arange(n) - (n - 1) / 2) / f + (nc - 1) / 2
     I, J = np.meshgrid(ic, ic, indexing="ij")
@@ -502,11 +752,21 @@ def simulate(P, stamp, args, rng, log):
     dwell_left = P["dwell"]
     F = 0.0
     info = dict(contact_area=0.0, film=0.0, T_contact=0.0)
+    pockets = None if args.no_air_trap else AirPockets(n)
+    contact = np.zeros((n, n), bool)
+    p_wax = 0.0
+    dt = 0.0
+    max_pockets = 0
     steps = 0
     while steps < 20000:
         steps += 1
         c = rel + z
-        wax.redistribute(c)
+        if pockets is not None:
+            c_eff = pockets.ceiling(wax, c, contact, p_wax, dt, P["air_leak"])
+            max_pockets = max(max_pockets, pockets.count)
+        else:
+            c_eff = c
+        wax.redistribute(c_eff)
         contact = finite & (wax.h >= c - 1e-4) & (wax.h > 0.01)
         wax.contact = contact
         A = contact.sum() * dx * dx
@@ -516,6 +776,7 @@ def simulate(P, stamp, args, rng, log):
             Tc = float(wax.T[contact].mean())
             p = wax.yield_stress(Tc) * (1.0 + R / (3.0 * max(film, 0.05)))
             F = p * A * 1e-6
+            p_wax = min(p, P["force"] / (A * 1e-6))
             if t_hold is None:
                 info.update(contact_area=A, film=film, T_contact=Tc)
         else:
@@ -532,19 +793,42 @@ def simulate(P, stamp, args, rng, log):
                     f"плёнка {info['film']:.2f} мм, T контакта {info['T_contact']:.0f}°C"
                     + (" (упёрся в бумагу)" if bottom else ""))
             dt = 0.25
+            # при постоянной силе штамп понемногу оседает, и сургуч затекает в
+            # карманы, пока сжатый воздух не уравновесит давление
+            if pockets is not None and A > 0 and not bottom:
+                need = pockets.deficit(wax, c_eff)
+                if need > 1e-4:
+                    z -= min(need / A, dz)
         if t_hold is not None:
             if dwell_left <= 0:
                 break
             dt = min(dt, dwell_left)
             dwell_left -= dt
         wax.flow(dt, blocked=contact)
+        bubbles.advect(wax)
+        bubbles.rise(wax, dt)
+        bubbles.pop(wax)
+    if pockets is not None:
+        info.update(air_pockets=max_pockets, trapped_air_mm3=round(pockets.volume, 4))
+        if max_pockets:
+            log(f"  воздух в карманах штампа: до {max_pockets} карманов, "
+                f"к концу {pockets.volume:.2f} мм^3 сжатого воздуха")
     # --- 4. подъём штампа: небольшая релаксация ещё мягкого сургуча ---
     wax.contact[:] = False
     wax.flow(args.post_flow)
+    bubbles.advect(wax)
+    bubbles.rise(wax, args.post_flow)
+    bubbles.pop(wax)
+    voids = bubbles.voids(wax)
+    if bubbles.created:
+        info.update(bubbles_created=bubbles.created, bubbles_popped=bubbles.popped,
+                    bubbles_inside=len(voids))
+        log(f"  пузырьки: всего {bubbles.created}, лопнули {bubbles.popped}, внутри осталось {len(voids)}")
     log(f"  к концу выдержки сургуч выдержал бы {F:.0f} Н (застыл); "
         f"время расчёта {time.time() - t0:.1f} с")
     info.update(stamp_center=[sx, sy], puddle_center=[cx, cy],
                 max_height=float(wax.h.max()), volume_mm3=float(wax.h.sum() * dx * dx))
+    info["voids"] = voids
     return wax.h, coords, info
 
 
@@ -556,10 +840,10 @@ def crop(h, margin_px):
     rows = np.flatnonzero((h > 0.01).any(axis=1))
     cols = np.flatnonzero((h > 0.01).any(axis=0))
     if len(rows) == 0:
-        return h
+        return h, 0, 0
     r0, r1 = max(rows[0] - margin_px, 0), min(rows[-1] + margin_px + 1, h.shape[0])
     c0, c1 = max(cols[0] - margin_px, 0), min(cols[-1] + margin_px + 1, h.shape[1])
-    return h[r0:r1, c0:c1]
+    return h[r0:r1, c0:c1], r0, c0
 
 
 def save_heightmap(path, h, dx, zmax=None):
@@ -588,8 +872,25 @@ def save_preview(path, h, dx):
     Image.fromarray((rgb * 255).astype(np.uint8)).save(path)
 
 
-def save_stl(path, h, dx, base=0.0, eps=0.02):
-    """Замкнутое тело: верх - поверхность сургуча, низ - плоскость z=0."""
+def icosphere(level):
+    t = (1 + 5 ** 0.5) / 2
+    v = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0), (0, -1, t), (0, 1, t),
+         (0, -1, -t), (0, 1, -t), (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
+    f = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 9), (5, 11, 4),
+         (11, 10, 2), (10, 7, 6), (7, 1, 8), (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8),
+         (3, 8, 9), (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+    tris = np.array([[v[a], v[b], v[c]] for a, b, c in f], float)
+    for _ in range(level):
+        a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+        ab, bc, ca = (a + b) / 2, (b + c) / 2, (c + a) / 2
+        tris = np.concatenate([np.stack(q, 1) for q in
+                               ((a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca))])
+    return tris / np.linalg.norm(tris, axis=2, keepdims=True)
+
+
+def save_stl(path, h, dx, base=0.0, eps=0.02, voids=()):
+    """Замкнутое тело: верх - поверхность сургуча, низ - плоскость z=0.
+    voids - внутренние полости (строка, столбец, z, r) в пикселях h и мм."""
     ny, nx = h.shape
     xs = (np.arange(nx) - (nx - 1) / 2) * dx
     ys = -(np.arange(ny) - (ny - 1) / 2) * dx
@@ -629,6 +930,10 @@ def save_stl(path, h, dx, base=0.0, eps=0.02):
         pj = ej if dj == -1 else ej + 1
         q0, q1 = (ei, pj), (ei + 1, pj)
         tris.append(_wall(P(*q0), P(*q1), P(*q0, False), P(*q1, False), np.array([sgn, 0, 0])))
+    for i, j, zc, r in voids:
+        sph = icosphere(1 if r < 0.3 else 2)[:, ::-1] * r     # нормали внутрь полости
+        sph = sph + np.array([(j - (nx - 1) / 2) * dx, -(i - (ny - 1) / 2) * dx, zc + base])
+        tris.append(sph)
     tris = np.concatenate([t for t in tris if len(t)]).astype(np.float32)
     nrm = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
     nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
@@ -675,6 +980,8 @@ def build_parser():
                    help="не зеркалить (если карта уже нарисована как готовый оттиск)")
     g.add_argument("--stamp-blur", type=float, default=0.04,
                    help="сглаживание штампа, мм - предел передачи мелких деталей (0.04)")
+    g.add_argument("--no-air-trap", action="store_true",
+                   help="не учитывать воздух, запертый в углублениях штампа")
     g.add_argument("--make-demo-stamp", metavar="PNG", help="создать демо-штамп и выйти")
 
     g = ap.add_argument_group("параметры симуляции (число, a:b или m~s)")
@@ -702,6 +1009,8 @@ def build_parser():
                    help="добавить подложку этой толщины под всё поле, мм (0 = только сургуч)")
     g.add_argument("--stl-step", type=int, default=1,
                    help="прореживание сетки для STL (1 = полное разрешение)")
+    g.add_argument("--no-stl-voids", action="store_true",
+                   help="не добавлять в STL внутренние полости от пузырьков")
     g.add_argument("--no-crop", action="store_true", help="не обрезать поле по сургучу")
     g.add_argument("--no-preview", action="store_true", help="не сохранять PNG-превью")
     g.add_argument("--count", type=int, default=1, help="сколько вариантов сгенерировать (1)")
@@ -752,8 +1061,13 @@ def main(argv=None):
         log("  " + ", ".join(f"{n}={v:.3g}" for n, v in P.items()))
         h, coords, info = simulate(P, stamp, args, rng, log)
         dx = args.resolution
+        voids = info.pop("voids")
         if not args.no_crop:
-            h = crop(h, int(2.0 / dx))
+            h, r0, c0 = crop(h, int(2.0 / dx))
+            voids = [(i - r0, j - c0, zc, r) for i, j, zc, r in voids]
+        info["voids"] = [dict(x_mm=round((j - (h.shape[1] - 1) / 2) * dx, 3),
+                              y_mm=round(-(i - (h.shape[0] - 1) / 2) * dx, 3),
+                              z_mm=round(zc, 3), r_mm=round(r, 3)) for i, j, zc, r in voids]
         meta = dict(seed=seed, index=k, params=P,
                     specs={n: getattr(args, n).text for n in SIM_PARAMS},
                     stamp=os.path.abspath(args.stamp), stamp_size_mm=args.stamp_size,
@@ -767,7 +1081,8 @@ def main(argv=None):
             log(f"  -> {prefix}_height.npy (мм)")
         if "stl" in formats:
             s = max(args.stl_step, 1)
-            ntri = save_stl(prefix + ".stl", h[::s, ::s], dx * s, args.stl_base)
+            vs = [] if args.no_stl_voids else [(i / s, j / s, zc, r) for i, j, zc, r in voids]
+            ntri = save_stl(prefix + ".stl", h[::s, ::s], dx * s, args.stl_base, voids=vs)
             log(f"  -> {prefix}.stl ({ntri} треугольников)")
         if not args.no_preview:
             save_preview(prefix + "_preview.png", h, dx)

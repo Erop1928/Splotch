@@ -18,6 +18,12 @@ result as an STL or a 16-bit heightmap.
 - **Pressing.** The stamp comes down with an offset, rotation and tilt. Displaced
   wax flows into the stamp's cavities and out past its edge, forming a rim. The
   stamp stops where its force balances the resistance of the cooling wax.
+- **Trapped air.** Recesses of the stamp that get sealed off by wax keep their
+  air. It compresses under the press but does not vanish, so closed details fill
+  only partly, as on real seals.
+- **Bubbles.** Air caught while melting and pouring rises slowly through the wax
+  and pops at the surface. Early pops heal while the wax is hot; late ones leave
+  pinholes. Bubbles that never surface become real internal voids in the STL.
 - **Timing matters.** Press too late and the wax has set, giving a shallow or
   incomplete impression. Too little wax and the edges of the design are cut off.
 - **Randomization.** Every simulation parameter accepts a fixed value, a range or
@@ -57,8 +63,8 @@ Ready-made stamps (circle, star, diamond, hexagon, heart, shield) are in
 python3 splotch.py --stamp examples/stamps/star.png --stamp-size 26 --volume 2 --out star
 ```
 
-A seal takes about 30 s at the default 0.15 mm grid. Use `--resolution 0.25`
-for quick drafts (~7 s).
+A seal takes about 45 s at the default 0.15 mm grid. Use `--resolution 0.25`
+for quick drafts (~10 s).
 
 ## Stamp heightmap
 
@@ -95,8 +101,23 @@ and reads correctly on the seal.
 | pressed too late | 12 s pause before pressing: the wax has set, the impression is shallow |
 | little wax, weak press | 1.1 cm³ and 12 N: the design is faint and the edges barely form |
 
+## Trapped air and bubbles
+
+![Trapped air under the stamp, pinholes and large bubbles](examples/air_and_bubbles.png)
+
+| Seal | What happens |
+|---|---|
+| trapped air | the "S" is a closed recess of the stamp: its air is squeezed but stays, so the letter is up to 0.2 mm short of full height (red) |
+| pinholes | `--bubbles 150 --bubble-size 0.35 --drop-height 150`: most bubbles pop and heal while pouring, late ones leave small craters |
+| big bubbles, hot press | `--bubbles 80 --bubble-size 0.5 --delay 1`: bubbles thicker than the wax film under the stamp leave holes down to the paper |
+
+Air trapping is on by default (`--no-air-trap` turns it off). Bubbles are off
+by default (`--bubbles 0`).
+
 All parameters of every example are saved next to it in a `.json` file in
-[`examples/gallery/`](examples/gallery) and [`examples/conditions/`](examples/conditions).
+[`examples/gallery/`](examples/gallery), [`examples/conditions/`](examples/conditions)
+and [`examples/bubbles/`](examples/bubbles). The README images are built by
+[`examples/make_sheets.py`](examples/make_sheets.py).
 
 ## Parameters
 
@@ -125,6 +146,9 @@ Negative ranges work as is: `--offset-x -2:2`.
 | `--tilt` / `--tilt-dir` | 0 / 0:360 | stamp tilt and its direction, degrees |
 | `--press-speed` | 4 | stamp descent speed, mm/s |
 | `--dwell` | 5 | time the stamp is held down, s |
+| `--bubbles` | 0 | air bubbles per cm³ of wax (more with a higher pour) |
+| `--bubble-size` | 0.25 | mean bubble radius, mm |
+| `--air-leak` | 0.3 | share of trapped stamp air leaking out per second |
 
 Material constants (`--viscosity`, `--visc-slope`, `--yield-stress`,
 `--yield-slope`, `--cool-time`, `--stamp-chill`) and numerics (`--resolution`,
@@ -136,9 +160,9 @@ For each seal, `<prefix>`:
 
 | File | Content |
 |---|---|
-| `<prefix>.stl` | watertight solid of the wax; `--stl-base` adds a base plate, `--stl-step` thins the mesh |
+| `<prefix>.stl` | watertight solid of the wax with bubbles as internal voids; `--stl-base` adds a base plate, `--stl-step` thins the mesh, `--no-stl-voids` leaves the voids out |
 | `<prefix>_height.png` | 16-bit heightmap; height in mm = value / 65535 × `z_mm_at_white` |
-| `<prefix>.json` | sampled parameters, press result, heightmap scale |
+| `<prefix>.json` | sampled parameters, press result, heightmap scale, trapped air, bubble list |
 | `<prefix>_preview.png` | shaded preview |
 | `<prefix>_height.npy` | float heights in mm (with `--format npy`) |
 
@@ -155,13 +179,25 @@ batch the same heightmap scale.
    by a pressure field solved over the contact zone (`∇·(K∇p) = source`,
    `K ∝ h³`, `p = 0` wherever there is free space). The stamp's resistance uses
    Prandtl's squeeze formula for a plastic layer, `p ≈ σ_y(T)·(1 + R / 3h)`.
-3. **Dwell and lift.** Wax under the cold stamp cools faster. After lifting it
+3. **Trapped air.** Air regions under the stamp that no longer connect to the
+   outside are tracked as pockets. Each keeps the air it had when it closed,
+   compressed by the wax pressure (`pV = const`) and slowly leaking. The air
+   sits in the deepest part of the pocket; wax fills up to a level under it.
+   While the stamp is held at constant force it settles a little, letting wax
+   creep into pockets until they balance.
+4. **Bubbles.** Each bubble has a position, a relative height in the wax layer
+   and a radius. It is carried along by the wax flow and rises by Stokes' law,
+   `v = 2Δρ g r² / 9μ`. When the film above it gets thinner than a quarter of
+   its radius it pops and leaves a crater of its own volume.
+5. **Dwell and lift.** Wax under the cold stamp cools faster. After lifting it
    relaxes briefly.
 
 ## Limitations
 
-- 2.5D model: no overhangs, air bubbles, or wax strings from lifting the stamp
-  too early.
+- 2.5D model: no overhangs or wax strings from lifting the stamp too early.
+  Bubbles are point-like particles: they do not merge or change shape, and only
+  the voids in the STL are three-dimensional.
+- Bubbles roughly double the run time (~1.5 min per seal).
 - Material constants are tuned by eye for plausible results, not measured. If
   impressions come out too shallow or too deep for your force, adjust
   `--yield-stress` first.

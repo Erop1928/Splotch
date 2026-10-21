@@ -23,7 +23,10 @@
     "yield_stress": 250.0,
     "yield_slope": 0.09,
     "cool_time": 5.0,
-    "stamp_chill": 3.0
+    "stamp_chill": 3.0,
+    "bubbles": 0.0,
+    "bubble_size": 0.25,
+    "air_leak": 0.3
   },
   "specs": {
     "volume": "1.6",
@@ -47,33 +50,39 @@
     "yield_stress": "250",
     "yield_slope": "0.09",
     "cool_time": "5",
-    "stamp_chill": "3"
+    "stamp_chill": "3",
+    "bubbles": "0",
+    "bubble_size": "0.25",
+    "air_leak": "0.3"
   },
-  "stamp": "examples/stamps/diamond.png",
+  "stamp": "/home/user/splotch/examples/stamps/diamond.png",
   "stamp_size_mm": 26.0,
   "relief_depth_mm": 1.0,
   "mirror": true,
   "resolution_mm": 0.15,
   "result": {
-    "contact_area": 309.91499999999996,
-    "film": 0.7713995288043934,
-    "T_contact": 75.04604247378168,
-    "force_at_stop": 23.43603397758977,
+    "contact_area": 302.80499999999995,
+    "film": 0.7672339672450809,
+    "T_contact": 75.04218771125308,
+    "force_at_stop": 22.79167658025244,
+    "air_pockets": 16,
+    "trapped_air_mm3": 0.1395,
     "stamp_center": [
-      0.22931650053595085,
-      0.47575210833188447
+      0.2293161934066994,
+      0.4757520117680125
     ],
     "puddle_center": [
-      0.22931650053595085,
-      0.47575210833188447
+      0.2293161934066994,
+      0.4757520117680125
     ],
-    "max_height": 5.031115270980797,
-    "volume_mm3": 1600.0000000000002
+    "max_height": 5.032246347669847,
+    "volume_mm3": 1599.9999999999995,
+    "voids": []
   },
   "heightmap": {
     "file": "diamond_height.png",
     "mm_per_pixel": 0.15,
-    "z_mm_at_white": 5.031115270980797,
+    "z_mm_at_white": 5.032246347669847,
     "width_mm": 32.699999999999996,
     "height_mm": 32.699999999999996,
     "note": "16 бит; высота_мм = значение/65535 * z_mm_at_white"

@@ -23,7 +23,10 @@
     "yield_stress": 250.0,
     "yield_slope": 0.09,
     "cool_time": 5.0,
-    "stamp_chill": 3.0
+    "stamp_chill": 3.0,
+    "bubbles": 0.0,
+    "bubble_size": 0.25,
+    "air_leak": 0.3
   },
   "specs": {
     "volume": "1.6",
@@ -47,34 +50,40 @@
     "yield_stress": "250",
     "yield_slope": "0.09",
     "cool_time": "5",
-    "stamp_chill": "3"
+    "stamp_chill": "3",
+    "bubbles": "0",
+    "bubble_size": "0.25",
+    "air_leak": "0.3"
   },
-  "stamp": "examples/stamps/circle.png",
+  "stamp": "/home/user/splotch/examples/stamps/circle.png",
   "stamp_size_mm": 26.0,
   "relief_depth_mm": 1.2,
   "mirror": true,
   "resolution_mm": 0.15,
   "result": {
-    "contact_area": 490.2975,
-    "film": 1.032896369332956,
-    "T_contact": 73.43154872716649,
-    "force_at_stop": 40.766487317883524,
+    "contact_area": 478.0125,
+    "film": 1.0216156405576953,
+    "T_contact": 73.10745088114598,
+    "force_at_stop": 40.865525886450236,
+    "air_pockets": 5,
+    "trapped_air_mm3": 0.2624,
     "stamp_center": [
-      -0.2538994827435419,
-      -1.1493198793828352
+      -0.2538994915557141,
+      -1.1493198146221288
     ],
     "puddle_center": [
-      -0.2538994827435419,
-      -1.1493198793828352
+      -0.2538994915557141,
+      -1.1493198146221288
     ],
-    "max_height": 5.309423496488826,
-    "volume_mm3": 1600.0000000000002
+    "max_height": 5.3177455943450305,
+    "volume_mm3": 1600.0000000000002,
+    "voids": []
   },
   "heightmap": {
     "file": "1_classic_height.png",
     "mm_per_pixel": 0.15,
-    "z_mm_at_white": 5.309423496488826,
-    "width_mm": 35.55,
+    "z_mm_at_white": 5.3177455943450305,
+    "width_mm": 35.699999999999996,
     "height_mm": 35.25,
     "note": "16 бит; высота_мм = значение/65535 * z_mm_at_white"
   }
